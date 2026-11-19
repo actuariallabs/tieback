@@ -52,7 +52,15 @@ def _pick(rng, table: dict, n: int):
     return np.array(keys, dtype=object)[rng.choice(len(keys), n, p=w / w.sum())]
 
 
-def build(out: Path = OUT, n_policies: int = 9_000, seed: int = 2027) -> dict[str, pl.DataFrame]:
+def build(out: Path = OUT, n_policies: int = 9_000, seed: int = 2027, *, messy: bool = False) -> dict[str, pl.DataFrame]:
+    """Write the sample book. `messy=True` adds two more files (finance
+    premium, driver convictions) and plants the problems real extracts have;
+    `build_with_truth` also returns what was planted."""
+    return build_with_truth(out, n_policies, seed, messy=messy)[0]
+
+
+def build_with_truth(out: Path = OUT, n_policies: int = 9_000, seed: int = 2027, *,
+                     messy: bool = False) -> tuple[dict[str, pl.DataFrame], dict]:
     rng = np.random.default_rng(seed)
     numbers = rng.choice(np.arange(100_000, 1_000_000), n_policies + 40, replace=False)
     pol_nums, ghost_nums = numbers[:n_policies], numbers[n_policies:]
@@ -146,15 +154,125 @@ def build(out: Path = OUT, n_policies: int = 9_000, seed: int = 2027) -> dict[st
         "vehicles.csv": pl.DataFrame(veh_rows).sort("POL_NUM", "TERM_START", "UNIT_NO"),
         "claims.csv": pl.DataFrame(claim_rows).sort("REPORTED_DATE", "CLAIM_NO"),
     }
+    truth: dict = {}
+    if messy:
+        frames, truth = _mess_up(frames, np.random.default_rng(seed + 1))
     out.mkdir(parents=True, exist_ok=True)
     for name, df in frames.items():
         df.write_csv(out / name)
-    return frames
+    return frames, truth
+
+
+def _typo(rng, digits: str, kind: str, taken: set[str]) -> str | None:
+    """A mistyped copy of a digit string that is not itself a real key."""
+    for _ in range(50):
+        if kind == "swap":
+            i = int(rng.integers(0, len(digits) - 1))
+            if digits[i] == digits[i + 1]:
+                continue
+            new = digits[:i] + digits[i + 1] + digits[i] + digits[i + 2:]
+        else:
+            i = int(rng.integers(1, len(digits)))
+            new = digits[:i] + str((int(digits[i]) + int(rng.integers(1, 10))) % 10) + digits[i + 1:]
+        if new != digits and new.lstrip("0") not in taken:
+            return new
+    return None
+
+
+def _mess_up(frames: dict[str, pl.DataFrame], rng) -> tuple[dict[str, pl.DataFrame], dict]:
+    """Two more files and the problems real extracts carry. Returns the files
+    and a record of every problem planted, for testing."""
+    pol, veh, clm = frames["policies.csv"], frames["vehicles.csv"], frames["claims.csv"]
+    taken = set(pol["POLICY_NO"].str.slice(3).str.strip_chars_start("0").to_list())
+    truth: dict = {}
+
+    # Finance premium: one row per policy term, id '0482113/1', dates day first.
+    prem = pol.select(
+        (pl.col("POLICY_NO").str.slice(3) + "/" + pl.col("TERM_NO").cast(pl.Utf8)).alias("GL_POLICY_TERM"),
+        pl.col("TERM_EFF").dt.strftime("%d/%m/%Y").alias("BOOKED_FROM"),
+        pl.Series("WRITTEN_PREMIUM", np.round(rng.uniform(700, 3_200, pol.height), 2)),
+    ).sample(fraction=1.0, shuffle=True, seed=1)
+    # Driver convictions: per policy, dated, several per policy term.
+    pick = rng.integers(0, pol.height, max(pol.height // 5, 50))
+    eff = pol["TERM_EFF"].to_list()
+    days = (pol["TERM_EXP"] - pol["TERM_EFF"]).dt.total_days().to_list()
+    conv = pl.DataFrame({
+        "CONVICTION_ID": [f"MTO-{i:06d}" for i in range(len(pick))],
+        "POLICYNUM": [pol["POLICY_NO"][int(i)][3:] for i in pick],
+        "CONV_DATE": [eff[int(i)] + timedelta(days=int(rng.integers(0, max(int(days[int(i)]), 1)))) for i in pick],
+        "OFFENCE": rng.choice(["Speeding", "Distracted driving", "Careless driving", "Fail to stop"], len(pick)),
+    })
+
+    # Mistyped policy numbers on claims: neighbours swapped (applied by
+    # default) and one digit changed (reported as likely).
+    claim_ids = clm.filter(pl.col("POLICY_REF").str.slice(1).str.strip_chars_start("0").is_in(list(taken)))["CLAIM_NO"].unique().sort()
+    chosen = rng.choice(claim_ids.to_list(), 12, replace=False)
+    truth["claim_swaps"], truth["claim_changes"] = {}, {}
+    fix = {}
+    for j, cid in enumerate(chosen):
+        ref = clm.filter(pl.col("CLAIM_NO") == cid)["POLICY_REF"][0]
+        kind = "swap" if j < 8 else "change"
+        new = _typo(rng, ref[1:], kind, taken)
+        if new:
+            fix[cid] = "P" + new
+            truth["claim_swaps" if kind == "swap" else "claim_changes"][cid] = (ref, "P" + new)
+    clm = clm.with_columns(pl.col("CLAIM_NO").replace_strict(fix, default=pl.col("POLICY_REF")).alias("POLICY_REF"))
+
+    # A mistyped policy number on the vehicle schedule (the exposure file).
+    vrows = rng.choice(veh.height, 3, replace=False)
+    truth["vehicle_swaps"] = {}
+    nums = veh["POL_NUM"].to_list()
+    for r in vrows:
+        new = _typo(rng, f"{nums[r]}", "swap", taken)
+        if new:
+            truth["vehicle_swaps"][int(r)] = (nums[r], int(new))
+            nums[r] = int(new)
+    veh = veh.with_columns(pl.Series("POL_NUM", nums))
+
+    # Exposure longer than its term.
+    over = rng.choice(veh.height, 2, replace=False)
+    expo = veh["EARNED_CAR_YRS"].to_list()
+    for r in over:
+        expo[r] = round(expo[r] + 0.75, 4)
+    veh = veh.with_columns(pl.Series("EARNED_CAR_YRS", expo))
+    truth["exposure_over"] = 2
+
+    # One region spelt three ways.
+    reg = pol["REGION"].to_list()
+    idx = [i for i, r in enumerate(reg) if r == "Toronto"]
+    for i in idx[:20]:
+        reg[i] = "TORONTO"
+    for i in [i for i, r in enumerate(reg) if r == "Ottawa"][:5]:
+        reg[i] = "Otawa"
+    pol = pol.with_columns(pl.Series("REGION", reg))
+    truth["region_variants"] = {"TORONTO": "Toronto", "Otawa": "Ottawa"}
+
+    # Claim amounts: a sign error, paid above incurred, dates swapped.
+    rows = rng.choice(clm.height, 9, replace=False)
+    inc, paid = clm["INCURRED"].to_list(), clm["PAID"].to_list()
+    loss, rep = clm["LOSS_DATE"].to_list(), clm["REPORTED_DATE"].to_list()
+    for r in rows[:2]:
+        inc[r], paid[r] = -inc[r], 0.0
+    for r in rows[2:6]:
+        paid[r] = round(inc[r] * 1.3, 2)
+    for r in rows[6:9]:
+        loss[r], rep[r] = rep[r] + timedelta(days=3), loss[r]
+    clm = clm.with_columns(pl.Series("INCURRED", inc), pl.Series("PAID", paid),
+                           pl.Series("LOSS_DATE", loss), pl.Series("REPORTED_DATE", rep))
+    truth.update(negative=2, paid_over=4, reported_before=3)
+
+    # Rows exported twice.
+    veh = pl.concat([veh, veh[rng.choice(veh.height, 3, replace=False)]]).sort("POL_NUM", "TERM_START", "UNIT_NO")
+    clm = pl.concat([clm, clm[rng.choice(clm.height, 4, replace=False)]]).sort("REPORTED_DATE", "CLAIM_NO")
+    truth.update(dup_vehicles=3, dup_claims=4)
+
+    return ({"policies.csv": pol, "vehicles.csv": veh, "claims.csv": clm,
+             "premium.csv": prem, "convictions.csv": conv}, truth)
 
 
 def main() -> int:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT
-    for name, df in build(out).items():
+    for name, df in build(out, messy=True).items():
         print(f"{name}: {df.height:,} rows x {df.width} cols")
     return 0
 

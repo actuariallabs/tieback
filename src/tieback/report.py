@@ -31,6 +31,8 @@ def _step_lines(step: Step) -> list[str]:
     head = f"{step.table}  [{step.kind}]  on {keys}"
     if step.window:
         head += f", {step.window.date} within [{step.window.start}, {step.window.end})"
+    if step.kind == "group":
+        head = head.replace("[group]", "[per group]")
     out = [head] + [f"    {r}" for r in step.reasons]
     rows_ok = t.get("base_rows_before") == t.get("base_rows_after")
     out.append(f"    rows: {_n(t.get('base_rows_before'))} before, {_n(t.get('base_rows_after'))} after"
@@ -41,6 +43,7 @@ def _step_lines(step: Step) -> list[str]:
                    f" {_n(t.get('other_keys_ambiguous'))} keys listed twice and skipped")
         return out
     unit = t.get("unit", "row")
+    unit = "rows" if unit == "row" else unit
     parts = [t.get(f"units_{s}", 0) for s in ("attached", "no_key", "outside_window", "ambiguous")]
     ok = sum(parts) == t.get("units_in_file") and t.get("units_attached") == t.get("units_in_table")
     out.append(f"    {unit}: {_n(t.get('units_in_file'))} in file = {_n(parts[0])} attached + {_n(parts[1])} no matching key"
@@ -53,6 +56,11 @@ def _step_lines(step: Step) -> list[str]:
 
 
 def report(plan: Plan) -> str:
+    from tieback.checks import readable
+    return readable(_report(plan))
+
+
+def _report(plan: Plan) -> str:
     """The plan as an actuary would read it: each join, why that key, and
     whether every row, claim and dollar is accounted for."""
     t = plan.totals
@@ -67,7 +75,31 @@ def report(plan: Plan) -> str:
         ok = _close(t["exposure_in"], t["exposure_out"])
         lines.append(f"exposure: {_n(t['exposure_in'])} in, {_n(t['exposure_out'])} out  {_mark(ok)}")
     lines.append(f"rows: {_n(t.get('base_rows'))} in, {_n(t.get('rows'))} out  {_mark(t.get('base_rows') == t.get('rows'))}")
+    if plan.findings:
+        lines += ["", findings_text(plan.findings)]
     return "\n".join(lines)
+
+
+_MARK = {"error": "ERROR", "warning": "REVIEW", "info": "FIXED"}
+
+
+def findings_text(findings: list[dict], examples: int = 3) -> str:
+    """The findings, most serious first: what is wrong, what it does to the
+    numbers, a few examples and what to do."""
+    n = {s: sum(1 for f in findings if f["severity"] == s) for s in ("error", "warning", "info")}
+    out = [f"findings: {n['error']} errors, {n['warning']} to review, {n['info']} fixed"]
+    for f in findings:
+        out.append(f"  {_MARK[f['severity']]:<6}  {f['message']}")
+        if f.get("impact"):
+            out.append("          affects " + ", ".join(f"{k} {_n(v)}" for k, v in f["impact"].items()))
+        ex = f.get("examples") or []
+        for e in ex[:examples]:
+            out.append("          e.g. " + ", ".join(f"{k}={v}" for k, v in e.items()))
+        if len(ex) > examples:
+            out.append(f"         and {len(ex) - examples} more")
+        if f.get("action"):
+            out.append(f"          -> {f['action']}")
+    return "\n".join(out)
 
 
 def save_plan(plan: Plan, path: str | Path) -> None:

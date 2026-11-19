@@ -25,7 +25,7 @@ from tieback.keys import (
 from tieback.plan import KeyPair, Plan, Step, Window, assemble, parse_dates, replay
 from tieback.report import TieOut, check_total, load_plan, report, save_plan
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "JoinCandidate", "JoinDiagnostics", "JoinSpec", "KeyPair", "Plan", "ReconciliationResult", "Step",

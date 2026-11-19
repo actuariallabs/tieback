@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tieback"
-version = "0.1.0"
-description = "Join insurance extracts that were never meant to be joined, and prove the result ties back to the totals."
+version = "0.2.0"
+description = "Reconcile insurance extracts: join any number of files, correct mistyped keys, find what is wrong, and prove the result ties back to the totals."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
