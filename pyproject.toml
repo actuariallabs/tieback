@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tieback"
+version = "0.1.0"
+description = "Join insurance extracts that were never meant to be joined, and prove the result ties back to the totals."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Actuarial Labs" }]
+keywords = ["insurance", "actuarial", "reconciliation", "data-quality", "polars", "pricing"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Topic :: Office/Business :: Financial",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = ["polars>=1.0", "numpy>=1.24"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+tieback = "tieback.cli:main"
+
+[project.urls]
+Homepage = "https://actuariallabs.com"
+Source = "https://github.com/actuariallabs/tieback"
+Issues = "https://github.com/actuariallabs/tieback/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
