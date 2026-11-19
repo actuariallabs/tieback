@@ -87,9 +87,11 @@ def findings_text(findings: list[dict], examples: int = 3) -> str:
     """The findings, most serious first: what is wrong, what it does to the
     numbers, a few examples and what to do."""
     n = {s: sum(1 for f in findings if f["severity"] == s) for s in ("error", "warning", "info")}
-    out = [f"findings: {n['error']} errors, {n['warning']} to review, {n['info']} fixed"]
+    fixed = sum(1 for f in findings if f["severity"] == "info" and f["check"] != "control_total")
+    out = [f"findings: {n['error']} errors, {n['warning']} to review, {fixed} fixed"]
     for f in findings:
-        out.append(f"  {_MARK[f['severity']]:<6}  {f['message']}")
+        mark = "TIES" if f["check"] == "control_total" and f["severity"] == "info" else _MARK[f["severity"]]
+        out.append(f"  {mark:<6}  {f['message']}")
         if f.get("impact"):
             out.append("          affects " + ", ".join(f"{k} {_n(v)}" for k, v in f["impact"].items()))
         ex = f.get("examples") or []
