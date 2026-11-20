@@ -129,6 +129,6 @@ Version 0.2, alpha. The API may change before 1.0. CI runs on Python 3.10 to 3.1
 
 ## Who made this
 
-[Actuarial Labs](https://actuariallabs.com) is an actuarial science research lab. `tieback` is the reconciliation step from Pia, our AI actuary, released on its own because every pricing, reserving and data team needs it.
+[Actuarial Labs](https://actuariallabs.com) is an actuarial science research lab. `tieback` is the reconciliation step from Pia, our Chief AI Actuary, released on its own because every pricing, reserving and data team needs it.
 
 Apache 2.0.
